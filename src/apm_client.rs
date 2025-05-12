@@ -75,6 +75,29 @@ impl ApmClient {
         allow_invalid_certs: bool,
         root_cert_path: Option<String>,
     ) -> AnyResult<Self> {
+        let (authorization, client) =
+            Self::make_http_client(authorization, allow_invalid_certs, root_cert_path)?;
+
+        // we need a separate runtime, because `hyper` can create spans, which need to be ignored by
+        // thread-local `NoSubscriber`
+        let runtime = runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()?;
+
+        Ok(ApmClient {
+            apm_address: Arc::new(apm_address),
+            authorization,
+            client,
+            runtime,
+        })
+    }
+
+    pub fn make_http_client(
+        authorization: Option<Authorization>,
+        allow_invalid_certs: bool,
+        root_cert_path: Option<String>,
+    ) -> AnyResult<(Option<Arc<String>>, Client)> {
         let authorization = authorization
             .map(|authorization| match authorization {
                 Authorization::SecretToken(token) => format!("Bearer {}", token),
@@ -100,19 +123,7 @@ impl ApmClient {
 
         let client = client_builder.build()?;
 
-        // we need a separate runtime, because `hyper` can create spans, which need to be ignored by
-        // thread-local `NoSubscriber`
-        let runtime = runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()?;
-
-        Ok(ApmClient {
-            apm_address: Arc::new(apm_address),
-            authorization,
-            client,
-            runtime,
-        })
+        Ok((authorization, client))
     }
 
     pub fn send_batch(&self, batch: Batch) {
